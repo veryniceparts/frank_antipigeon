@@ -130,8 +130,9 @@ baked into the graph. The model's threshold and metadata are stored in the ONNX 
 
 - `pytest tests` passes 8 tests: motion (CNT, MOG2, diff), box merging, crops, tracker, end-to-end pipeline, ONNX round-trip.
 - Synthetic end-to-end run: train the tiny model (15 s on CPU), export ONNX, then run the pipeline on a held-out video.
-  All 6/6 pigeons were detected. 1 of 8 distractors (a crow) was flagged in some frames.
-  Frame-level precision was 0.92 and recall 0.73; recall loses the first frames of each track because of the 3-hit warm-up.
+  All 6/6 pigeons were detected. 1 of 10 distractors (a crow) was flagged in some frames.
+  Frame-level precision was 0.87 and recall 0.75; recall loses the first frames of each track because of the 3-hit warm-up.
+  See [REVIEW.md](REVIEW.md) for the full pipeline review, the fixed findings and the open risks.
 - The iNat teacher was checked on real pigeon and parrot photos.
 - **Not verified here:** real camera SDKs (pypylon, harvesters), `fetch_inat.py` (the network was blocked in the build
   environment), and pretrained timm weights (Hugging Face was blocked, so timm was only trained from scratch).

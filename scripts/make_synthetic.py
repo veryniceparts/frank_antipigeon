@@ -130,10 +130,15 @@ def main():
                 cls = "pigeon" if o.kind == "pigeon" else "not_pigeon"
                 cv2.imwrite(os.path.join(a.crops, cls, f"{tag}_t{i:05d}_f{f:06d}.jpg"), c)
         if a.crops and f % (a.crop_every * 10) == 0:  # pure background negatives
-            x, y = rng.integers(0, W - 100), rng.integers(0, H - 100)
-            s = int(rng.integers(20, 100))
-            c = square_crops(noisy, np.array([[x, y, x + s, y + s]]), 96)[0]
-            cv2.imwrite(os.path.join(a.crops, "not_pigeon", f"{tag}_bg_f{f:06d}.jpg"), c)
+            boxes = [o.box() for o in objs.values()]
+            for _ in range(20):  # only keep crops that contain no bird (incl. square_crops padding)
+                x, y = rng.integers(0, W - 100), rng.integers(0, H - 100)
+                s = int(rng.integers(20, 100))
+                m = s * 0.5 + 4
+                if all(x - m > b[2] or x + s + m < b[0] or y - m > b[3] or y + s + m < b[1] for b in boxes):
+                    c = square_crops(noisy, np.array([[x, y, x + s, y + s]]), 96)[0]
+                    cv2.imwrite(os.path.join(a.crops, "not_pigeon", f"{tag}_bg_f{f:06d}.jpg"), c)
+                    break
         vw.write(noisy)
     vw.release()
     gt.close()

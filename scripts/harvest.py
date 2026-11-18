@@ -9,6 +9,7 @@ track every --every frames.
 import argparse
 import os
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -29,8 +30,10 @@ def main():
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     total = 0
-    for src in a.source:
-        tag = os.path.splitext(os.path.basename(src))[0] or "cam"
+    run = time.strftime("%Y%m%d-%H%M%S")
+    for k, src in enumerate(a.source):
+        # unique per run and per source: track ids restart at 0 for every source
+        tag = f"{os.path.splitext(os.path.basename(src))[0] or 'cam'}-{run}-{k}"
         md = MotionDetector(scale=a.scale, min_area=a.min_area)
         tr = IoUTracker(n_unsure=a.every, n_sure=a.every)
         f = 0

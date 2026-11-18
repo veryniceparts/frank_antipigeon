@@ -60,6 +60,10 @@ def main():
             counts[lab] += 1
             w.writerow([os.path.abspath(f), f"{p[f]:.4f}", lab])
             if a.copy:
+                name = os.path.basename(f)
+                placed = [c for c in ("pigeon", "not_pigeon", "unsure") if os.path.exists(os.path.join(a.out, c, name))]
+                if placed:  # already sorted (maybe by hand in an earlier review): keep that decision
+                    continue
                 d = os.path.join(a.out, lab)
                 os.makedirs(d, exist_ok=True)
                 shutil.copy2(f, d)

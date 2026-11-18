@@ -17,14 +17,26 @@ import time
 import urllib.parse
 import urllib.request
 
-POS = ["Columba livia"]
+POS = ["Columba livia", "Columba palumbus"]  # wood pigeon counts as pigeon, as in the teacher
 # hard negatives: doves, other city birds, birds of similar size/colour
-NEG = ["Streptopelia decaocto", "Streptopelia senegalensis", "Zenaida macroura", "Columba palumbus",
+NEG = ["Streptopelia decaocto", "Streptopelia senegalensis", "Zenaida macroura",
        "Corvus corone", "Corvus brachyrhynchos", "Corvus monedula", "Pica pica", "Larus argentatus",
        "Chroicocephalus ridibundus", "Passer domesticus", "Sturnus vulgaris", "Turdus merula",
        "Accipiter nisus", "Falco tinnunculus", "Psittacula krameri", "Myiopsitta monachus"]
 API = "https://api.inaturalist.org/v1/observations"
 UA = {"User-Agent": "pigeonkit-dataset-fetcher"}
+LICENSES = {"cc0", "cc-by", "cc-by-sa"}
+
+
+def download(url, fn, timeout=30):
+    tmp = fn + ".part"  # atomic: a failed transfer never leaves a truncated file under the real name
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r, open(tmp, "wb") as fh:
+            fh.write(r.read())
+        os.replace(tmp, fn)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def fetch(taxon, n, out_dir, size, att):
@@ -41,12 +53,15 @@ def fetch(taxon, n, out_dir, size, att):
         for obs in res:
             if got >= n:
                 break
-            ph = obs["photos"][0]
+            # the API filter matches the observation; check each photo's own license
+            ph = next((p for p in obs["photos"] if (p.get("license_code") or "").lower() in LICENSES), None)
+            if ph is None:
+                continue
             url = ph["url"].replace("/square.", f"/{size}.")
             fn = os.path.join(out_dir, f"inat_{taxon.replace(' ', '_')}_{ph['id']}.jpg")
             if not os.path.exists(fn):
                 try:
-                    urllib.request.urlretrieve(url, fn)
+                    download(url, fn)
                 except Exception as e:  # noqa: BLE001
                     print("skip", url, e)
                     continue

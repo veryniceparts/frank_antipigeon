@@ -37,7 +37,7 @@ def main():
     clf = load_classifier(a.model, threshold=a.threshold)
     pipe = PigeonPipeline(clf, MotionDetector(scale=a.scale), IoUTracker(threshold=clf.threshold))
     tp = fp = fn = 0
-    obj_cls, obj_flag, obj_seen = {}, collections.Counter(), collections.Counter()
+    obj_cls, obj_flag, obj_gt = {}, collections.Counter(), collections.Counter()
     unmatched_flags = 0
     with open_camera(a.source) as cam:
         f = 0
@@ -46,31 +46,36 @@ def main():
             g = gt.get(f, [])
             for gid, _, cls in g:
                 obj_cls[gid] = cls
+                obj_gt[gid] += 1
             db = np.array([d.box for d in dets]) if dets else np.zeros((0, 4))
             gb = np.array([b for _, b, _ in g]) if g else np.zeros((0, 4))
             M = iou_matrix(db, gb) if len(db) and len(gb) else np.zeros((len(db), len(gb)))
+            flagged_gt = set()
             for i, d in enumerate(dets):
+                if not d.pigeon:
+                    continue
                 j = int(M[i].argmax()) if len(gb) else -1
                 if j >= 0 and M[i, j] >= a.iou:
-                    gid, _, cls = g[j]
-                    obj_seen[gid] += 1
-                    if d.pigeon:
-                        obj_flag[gid] += 1
-                        tp += cls == "pigeon"
-                        fp += cls != "pigeon"
-                elif d.pigeon:
+                    flagged_gt.add(j)
+                    if g[j][2] != "pigeon":
+                        fp += 1  # flagged a crow/sparrow/leaf
+                    # extra fragments on an already-counted pigeon are neither tp nor fp
+                else:
                     fp += 1
                     unmatched_flags += 1
-            for j, (gid, _, cls) in enumerate(g):
-                hit = len(db) and (M[:, j] >= a.iou).any() and any(dets[i].pigeon for i in np.where(M[:, j] >= a.iou)[0])
-                if cls == "pigeon" and not hit:
-                    fn += 1
+            for j, (gid, _, cls) in enumerate(g):  # tp/fn once per ground-truth box
+                if j in flagged_gt:
+                    obj_flag[gid] += 1
+                if cls == "pigeon":
+                    tp += j in flagged_gt
+                    fn += j not in flagged_gt
             f += 1
     print(f"frames={f}  per-frame classify+motion: {pipe.timer.report()}")
     print(f"frame-level PIGEON boxes: precision={tp / max(1, tp + fp):.3f} recall={tp / max(1, tp + fn):.3f} "
           f"(tp={tp} fp={fp} fn={fn}, flags on unmatched blobs={unmatched_flags})")
-    pig = [g for g, c in obj_cls.items() if c == "pigeon" and obj_seen[g] >= 3]
-    oth = [g for g, c in obj_cls.items() if c != "pigeon" and obj_seen[g] >= 3]
+    # every object present >=3 GT frames counts, including ones motion detection never found
+    pig = [g for g, c in obj_cls.items() if c == "pigeon" and obj_gt[g] >= 3]
+    oth = [g for g, c in obj_cls.items() if c != "pigeon" and obj_gt[g] >= 3]
     print(f"objects: pigeons detected {sum(obj_flag[g] > 0 for g in pig)}/{len(pig)}; "
           f"non-pigeons ever flagged {sum(obj_flag[g] > 0 for g in oth)}/{len(oth)} "
           f"({collections.Counter(obj_cls[g] for g in oth if obj_flag[g] > 0)})")

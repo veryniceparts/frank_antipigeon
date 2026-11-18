@@ -41,20 +41,22 @@ def collect(dirs, soft):
                     items[os.path.abspath(f)] = y
         lab = os.path.join(d, "labels.csv")
         if soft and os.path.exists(lab):
+            has_folders = any(os.path.isdir(os.path.join(d, c)) for c in ("pigeon", "not_pigeon"))
             with open(lab) as fh:
                 for r in csv.DictReader(fh):
                     if r["label"] == "unsure":
                         continue
-                    name = os.path.basename(r["path"])
-                    # a manual move between class folders overrides the teacher
+                    pt, name = float(r["p_teacher"]), os.path.basename(r["path"])
+                    if not has_folders:  # no review copy: train on the teacher's labels directly
+                        if os.path.exists(r["path"]):
+                            items[os.path.abspath(r["path"])] = pt
+                        continue
+                    # review folders are authoritative: deleted crops stay deleted, and a crop
+                    # the user moved keeps its hard folder label; otherwise use the soft target
                     for cls, y in (("pigeon", 1.0), ("not_pigeon", 0.0)):
                         p = os.path.abspath(os.path.join(d, cls, name))
-                        if p in items:
-                            items[p] = y if (y == 1.0) != (r["label"] == "pigeon") else float(r["p_teacher"])
-                            break
-                    else:
-                        if os.path.exists(r["path"]):
-                            items[r["path"]] = float(r["p_teacher"])
+                        if p in items and (y == 1.0) == (r["label"] == "pigeon"):
+                            items[p] = pt
     return sorted(items.items())
 
 
@@ -72,15 +74,16 @@ def motion_blur(img, k):
 
 
 class Crops(Dataset):
-    def __init__(self, items, size, train):
+    def __init__(self, items, size, train, cache=False):
+        # cache only when loading in the main process: DataLoader workers would each hold a copy
         self.items, self.size, self.train = items, size, train
-        self.cache = {}
+        self.cache = {} if cache else None
 
     def __len__(self):
         return len(self.items)
 
     def load(self, p):
-        im = self.cache.get(p)
+        im = self.cache.get(p) if self.cache is not None else None
         if im is None:
             im = cv2.imread(p, cv2.IMREAD_COLOR)
             if im is None:
@@ -89,7 +92,8 @@ class Crops(Dataset):
             if max(im.shape[:2]) > s:
                 f = s / max(im.shape[:2])
                 im = cv2.resize(im, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
-            self.cache[p] = im
+            if self.cache is not None:
+                self.cache[p] = im
         return im
 
     def __getitem__(self, i):
@@ -189,9 +193,10 @@ def main():
 
     w = np.array([1.0 / max(1, npos) if y >= 0.5 else 1.0 / max(1, len(tr) - npos) for _, y in tr])
     sampler = WeightedRandomSampler(torch.tensor(w, dtype=torch.double), num_samples=len(tr), replacement=True)
-    dl_tr = DataLoader(Crops(tr, a.size, True), a.bs, sampler=sampler, num_workers=a.workers,
+    dl_tr = DataLoader(Crops(tr, a.size, True, cache=a.workers == 0), a.bs, sampler=sampler, num_workers=a.workers,
                        drop_last=len(tr) > a.bs, persistent_workers=a.workers > 0)
-    dl_va = DataLoader(Crops(va, a.size, False), 256, num_workers=a.workers)
+    dl_va = DataLoader(Crops(va, a.size, False, cache=a.workers == 0), 256, num_workers=a.workers,
+                       persistent_workers=a.workers > 0)
 
     dev = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     net, mean, std = build_model(a.arch, pretrained=not a.no_pretrained)
