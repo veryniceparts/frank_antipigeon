@@ -74,6 +74,8 @@ def motion_blur(img, k):
 
 
 class Crops(Dataset):
+    gray = False  # set for mono cameras: every sample becomes 3-channel gray
+
     def __init__(self, items, size, train, cache=False):
         # cache only when loading in the main process: DataLoader workers would each hold a copy
         self.items, self.size, self.train = items, size, train
@@ -133,6 +135,8 @@ class Crops(Dataset):
                 im = cv2.cvtColor(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)  # mono cameras
         else:
             im = cv2.resize(im, (S, S), interpolation=cv2.INTER_AREA if max(im.shape[:2]) > S else cv2.INTER_LINEAR)
+        if self.gray:
+            im = cv2.cvtColor(cv2.cvtColor(im, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
         return torch.from_numpy(np.ascontiguousarray(im)), torch.tensor(y, dtype=torch.float32)
 
 
@@ -167,6 +171,7 @@ def main():
                     help="'tiny' or any timm model, e.g. mobilenetv3_small_050.lamb_in1k, "
                          "mobilenetv4_conv_small_050.e3000_r224_in1k")
     ap.add_argument("--no-pretrained", action="store_true")
+    ap.add_argument("--gray", action="store_true", help="mono camera (e.g. DALSA Nano M...): train on gray only")
     ap.add_argument("--size", type=int, default=96)
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--bs", type=int, default=64)
@@ -179,6 +184,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
+    Crops.gray = a.gray
 
     items = collect(a.data, a.soft)
     if not items:
@@ -241,7 +247,7 @@ def main():
     print(f"best val bal_acc {best:.3f}; threshold {thr:.3f} -> precision/recall {pr}")
 
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    meta = {"arch": a.arch, "size": a.size, "threshold": thr, "val_bal_acc": float(best),
+    meta = {"arch": a.arch, "size": a.size, "gray": a.gray, "threshold": thr, "val_bal_acc": float(best),
             "val_precision_recall": pr, "n_train": len(tr), "n_val": len(va)}
     export_onnx(model.net, mean, std, a.size, a.out, meta)
     trt_onnx = os.path.splitext(a.out)[0] + ".f32.onnx"  # float input -> build TensorRT engine from this

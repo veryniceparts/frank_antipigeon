@@ -34,9 +34,13 @@ class Timer:
 
 class PigeonPipeline:
     def __init__(self, classifier, motion: MotionDetector | None = None, tracker: IoUTracker | None = None,
-                 pad: float = 0.2):
+                 pad: float = 0.2, bayer: int | None = None):
+        """bayer: cv2.COLOR_Bayer*2BGR code when frames are RAW Bayer (camera.bayer_code)."""
         self.clf = classifier
+        self.bayer = bayer
         self.motion = motion or MotionDetector()
+        if bayer is not None and self.motion.s % 2:
+            raise ValueError("RAW Bayer frames need an even motion scale (2 or 4)")
         self.tracker = tracker or IoUTracker(threshold=getattr(classifier, "threshold", 0.5))
         self.pad = pad
         self.f = 0
@@ -51,7 +55,7 @@ class PigeonPipeline:
         t2 = time.perf_counter()
         if todo:
             tb = np.array([self.tracker.tracks[i].box for i in todo])
-            crops = square_crops(frame, tb, self.clf.size, pad=self.pad)
+            crops = square_crops(frame, tb, self.clf.size, pad=self.pad, bayer=self.bayer)
             t3 = time.perf_counter()
             probs = self.clf(crops)  # one batched call per frame
             for i, p in zip(todo, probs):
@@ -69,9 +73,10 @@ class PigeonPipeline:
         return dets
 
 
-def draw(frame: np.ndarray, dets: list[Detection], show_all: bool = True, fps: float | None = None) -> np.ndarray:
+def draw(frame: np.ndarray, dets: list[Detection], show_all: bool = True, fps: float | None = None,
+         bayer: int | None = None) -> np.ndarray:
     if frame.ndim == 2:
-        out = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        out = cv2.cvtColor(frame, bayer if bayer is not None else cv2.COLOR_GRAY2BGR)
     elif frame.shape[2] == 4:
         out = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
     else:

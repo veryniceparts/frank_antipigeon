@@ -50,6 +50,8 @@ class MotionDetector:
         self.mask = None  # last foreground mask (downscaled), for debugging
 
     def _small(self, frame: np.ndarray) -> np.ndarray:
+        # RAW Bayer input (2-D): with an EVEN scale, INTER_LINEAR samples exactly between a 2x2 colour
+        # cell, i.e. each mask pixel is an R+G+G+B average -> correct luma without debayering the frame
         g = frame if frame.ndim == 2 else cv2.cvtColor(
             frame, cv2.COLOR_BGRA2GRAY if frame.shape[2] == 4 else cv2.COLOR_BGR2GRAY)
         if self.s > 1:  # gray first, then INTER_LINEAR (INTER_AREA is ~9x slower)
@@ -127,12 +129,15 @@ def merge_boxes(b: np.ndarray, gap: int) -> np.ndarray:
     return b
 
 
-def square_crops(frame: np.ndarray, boxes: np.ndarray, size: int, pad: float = 0.2, min_pad: int = 4):
+def square_crops(frame: np.ndarray, boxes: np.ndarray, size: int, pad: float = 0.2, min_pad: int = 4,
+                 bayer: int | None = None):
     """Cut padded square crops around boxes and resize to size x size (uint8, same channels).
 
     Square + padding keeps the bird's aspect ratio and some context, matching how
     the classifier is trained (see scripts/harvest.py which uses the same function).
     Out-of-frame parts are filled by edge replication.
+    bayer: cv2.COLOR_Bayer*2BGR code if ``frame`` is a RAW Bayer mosaic -> only the crop is debayered
+    (an 80 px crop costs ~5 us vs ~0.25 ms (x86) / ~1 ms (Carmel) for a full 720p frame).
     """
     H, W = frame.shape[:2]
     n = len(boxes)
@@ -144,11 +149,22 @@ def square_crops(frame: np.ndarray, boxes: np.ndarray, size: int, pad: float = 0
         cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
         a0, b0 = cx - side // 2, cy - side // 2
         a1, b1 = a0 + side, b0 + side
-        c = frame[max(0, b0):min(H, b1), max(0, a0):min(W, a1)]
-        if ch == 4:
-            c = c[..., :3]  # BGRx camera frames: drop the padding channel
-        if a0 < 0 or b0 < 0 or a1 > W or b1 > H:
-            c = cv2.copyMakeBorder(c, max(0, -b0), max(0, b1 - H), max(0, -a0), max(0, a1 - W), cv2.BORDER_REPLICATE)
+        if bayer is not None:
+            # even-aligned window keeps the colour-filter phase; debayer, then pad like below
+            xa, ya = max(0, a0) & ~1, max(0, b0) & ~1
+            xb, yb = min(W, a1), min(H, b1)
+            xb, yb = min(W & ~1, xa + max(2, (xb - xa + 1) & ~1)), min(H & ~1, ya + max(2, (yb - ya + 1) & ~1))
+            c = cv2.cvtColor(np.ascontiguousarray(frame[ya:yb, xa:xb]), bayer)
+            l, t, r, b = max(0, xa - a0), max(0, ya - b0), max(0, a1 - xb), max(0, b1 - yb)
+            if l or t or r or b:
+                c = cv2.copyMakeBorder(c, t, b, l, r, cv2.BORDER_REPLICATE)
+            ch = 3
+        else:
+            c = frame[max(0, b0):min(H, b1), max(0, a0):min(W, a1)]
+            if ch == 4:
+                c = c[..., :3]  # BGRx camera frames: drop the padding channel
+            if a0 < 0 or b0 < 0 or a1 > W or b1 > H:
+                c = cv2.copyMakeBorder(c, max(0, -b0), max(0, b1 - H), max(0, -a0), max(0, a1 - W), cv2.BORDER_REPLICATE)
         interp = cv2.INTER_AREA if side > size else cv2.INTER_LINEAR
         c = cv2.resize(c, (size, size), interpolation=interp)
         if ch == 1:

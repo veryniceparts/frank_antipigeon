@@ -18,7 +18,8 @@ from pigeonkit import IoUTracker, MotionDetector, PigeonPipeline, draw, load_cla
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="0", help="camera index | video file | rtsp:// | csi://0?w=1280&h=720&fps=120 | gst://<pipeline> | "
+    ap.add_argument("--source", default="0", help="camera index | video file | rtsp:// | dalsa://<id|ip>?pf=BayerRG8&w=1280&h=720&exp=800&fps=300 | "
+                         "csi://0?w=1280&h=720&fps=120 | gst://<pipeline> | "
                          "pylon:// | genicam://<cti>")
     ap.add_argument("--model", default="models/pigeon.onnx", help=".engine (TensorRT, Jetson) | .onnx student | iNat .tflite teacher")
     ap.add_argument("--threshold", type=float, default=None, help="override model threshold")
@@ -35,16 +36,17 @@ def main():
 
     clf = load_classifier(a.model, threshold=a.threshold)
     ign = cv2.imread(a.ignore_mask, cv2.IMREAD_GRAYSCALE) if a.ignore_mask else None
-    pipe = PigeonPipeline(
-        clf,
-        MotionDetector(scale=a.scale, fps=a.fps, method=a.method, min_area=a.min_area, ignore_mask=ign),
-        IoUTracker(threshold=clf.threshold),
-    )
     writer = None
     n_pigeon_frames = 0
     t_start = time.perf_counter()
     fps_ema = None
     with open_camera(a.source) as cam:
+        pipe = PigeonPipeline(
+            clf,
+            MotionDetector(scale=a.scale, fps=a.fps, method=a.method, min_area=a.min_area, ignore_mask=ign),
+            IoUTracker(threshold=clf.threshold),
+            bayer=cam.bayer_code,  # RAW Bayer cameras (e.g. DALSA BayerRG8): debayer crops only
+        )
         while (item := cam.read()) is not None:
             fid, _, frame = item
             t = time.perf_counter()
@@ -55,7 +57,7 @@ def main():
                 n_pigeon_frames += 1
                 # >>> hook your deterrent here (GPIO, MQTT, serial ...) <<<
             if a.show or a.out:
-                vis = draw(frame.copy(), dets, show_all=not a.pigeons_only, fps=fps_ema)
+                vis = draw(frame.copy(), dets, show_all=not a.pigeons_only, fps=fps_ema, bayer=cam.bayer_code)
                 if a.out:
                     if writer is None:
                         os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
@@ -71,8 +73,13 @@ def main():
         writer.release()
     el = time.perf_counter() - t_start
     print(f"frames={pipe.f} wall_fps={pipe.f / el:.1f} cam_dropped={cam.stats.dropped} "
+          f"cam_incomplete={cam.stats.incomplete} "
           f"crops_classified={pipe.n_classified} frames_with_pigeon={n_pigeon_frames}")
     print("per-frame:", pipe.timer.report())
+    if hasattr(cam, "network_stats"):  # GigE (DALSA via Aravis): packet loss / host underruns
+        st = cam.network_stats()
+        keys = ("n_completed_buffers", "n_failures", "n_underruns", "n_missing_packets", "n_resent_packets")
+        print("gige:", {k: st[k] for k in keys if k in st} or st)
 
 
 if __name__ == "__main__":

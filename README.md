@@ -16,7 +16,8 @@ Measured on a 4-core 2.1 GHz Xeon, CPU only, one ONNX thread: the whole pipeline
 classification 0.05 ms per frame on average). Because of the tracker, each object is classified
 a few times, not on every frame.
 
-**Target hardware: Jetson Xavier NX.** See [docs/JETSON.md](docs/JETSON.md) for the TensorRT engine, CSI/USB/GigE cameras,
+**Target hardware: Jetson Xavier NX + Teledyne DALSA Genie Nano (GigE Vision).** See [docs/DALSA.md](docs/DALSA.md)
+for the camera: Aravis, network tuning, ROI and frame-rate table, raw-Bayer path. See [docs/JETSON.md](docs/JETSON.md) for the TensorRT engine, CSI/USB/GigE cameras,
 power mode and setup. In short: train on a PC, copy `pigeon.f32.onnx` to the Jetson, run `scripts/build_trt.py` there,
 then `run.py --model models/pigeon.engine`.
 
@@ -54,6 +55,7 @@ Other tools:
 - `scripts/quantize.py`: INT8 static QDQ quantization calibrated on real crops. Benchmark before using it: on CPUs without VNNI, int8 was *slower* for the tiny net (0.21 vs 0.07 ms).
 - `scripts/build_trt.py`: builds the TensorRT engine on the Jetson from `*.f32.onnx`, for the GPU or `--dla 0`.
 - `scripts/jetson_setup.sh`: one-time Xavier NX setup.
+- `scripts/gige_tune.sh`: GigE host tuning for the DALSA camera (MTU 9000, rmem, cap_net_raw).
 - `scripts/evaluate.py`: precision/recall of the whole pipeline against a ground-truth csv.
 - `scripts/make_synthetic.py`: synthetic scene of pigeons, crows, sparrows, leaves and a swaying tree, for smoke tests. Not real data.
 
@@ -72,6 +74,7 @@ the model's threshold. `train.py` chooses that threshold for ≥98% validation p
 | `rtsp://…` | OpenCV, newest frame only |
 | `csi://0?w=1280&h=720&fps=120` | Jetson CSI camera through PyGObject GStreamer; uses BGRx frames directly (no CPU colour conversion) |
 | `gst://<pipeline>` | any GStreamer pipeline that outputs BGR, BGRx or GRAY8, e.g. USB MJPG with Jetson hardware decoding |
+| `dalsa://<id or IP>?pf=BayerRG8&w=1280&h=480&exp=800&fps=300` | **Teledyne DALSA Genie Nano** / any GigE Vision camera through Aravis. Bayer frames stay raw: motion runs on the mosaic and only the crops are debayered |
 | `pylon://` | Basler pypylon, `GrabStrategy_LatestImageOnly`, Mono8/Bayer8, ROI |
 | `genicam://<path.cti>` | any GenICam camera through harvesters |
 

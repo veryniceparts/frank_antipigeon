@@ -26,6 +26,7 @@ import numpy as np
 class CamStats:
     grabbed: int = 0
     delivered: int = 0
+    incomplete: int = 0  # GigE frames with lost packets (skipped)
     t0: float = field(default_factory=time.perf_counter)
 
     @property
@@ -64,6 +65,10 @@ class _Latest:
 
 class Camera:
     """Base class. Subclasses implement _open(), _grab() -> ndarray|None, _close()."""
+
+    # set by cameras that deliver RAW Bayer frames: cv2.COLOR_Bayer*2BGR code. The pipeline then runs
+    # motion on the mosaic and debayers only the crops (see PigeonPipeline(bayer=...)).
+    bayer_code = None
 
     def __init__(self, latest_only: bool = True):
         self.latest_only = latest_only
@@ -321,6 +326,120 @@ class GstCamera(Camera):
             pass
 
 
+class AravisCamera(Camera):
+    """GigE Vision / USB3 Vision cameras through Aravis (open source, aarch64) -- e.g. Teledyne DALSA
+    Genie Nano. Bayer formats are delivered RAW (bayer_code set) unless debayer=True.
+
+    roi = (width, height, offset_x, offset_y). Exposure in microseconds.
+    """
+
+    def __init__(self, device_id=None, pixel_format=None, roi=None, exposure_us=None, fps=None,
+                 packet_size=None, n_buffers=16, debayer=False, gain_db=None, **_):
+        super().__init__(latest_only=True)
+        self.device_id, self.pixel_format, self.roi = device_id, pixel_format, roi
+        self.exposure_us, self.fps, self.packet_size, self.gain_db = exposure_us, fps, packet_size, gain_db
+        self.n_buffers, self.debayer = n_buffers, debayer
+
+    def _open(self):
+        import gi
+        for v in ("0.8", "0.6"):
+            try:
+                gi.require_version("Aravis", v)
+                break
+            except ValueError:
+                continue
+        from gi.repository import Aravis
+        self.Arv = Aravis
+        Aravis.update_device_list()
+        self.cam = Aravis.Camera.new(self.device_id)  # None -> first camera found
+        if self.cam is None:
+            raise RuntimeError(f"Aravis camera {self.device_id!r} not found (check: arv-tool-0.8, NIC, firewall)")
+        c = self.cam
+        try:
+            c.stop_acquisition()
+        except Exception:
+            pass
+        if self.pixel_format:
+            c.get_device().set_string_feature_value("PixelFormat", self.pixel_format)
+        if self.roi:
+            w, h, x, y = self.roi
+            c.set_region(x, y, w, h)
+        try:
+            c.set_exposure_time_auto(Aravis.Auto.OFF)  # auto exposure silently caps fps
+        except Exception:
+            pass
+        if self.exposure_us:
+            c.set_exposure_time(float(self.exposure_us))
+        if self.gain_db is not None:
+            c.set_gain(float(self.gain_db))
+        if self.fps:
+            c.set_frame_rate(float(self.fps))
+        if c.is_gv_device():
+            if self.packet_size:
+                c.gv_set_packet_size(int(self.packet_size))
+            elif hasattr(c, "gv_auto_packet_size"):
+                c.gv_auto_packet_size()  # largest size that passes the network (needs jumbo frames for 8k)
+        c.set_acquisition_mode(Aravis.AcquisitionMode.CONTINUOUS)
+        self.pf = c.get_pixel_format_as_string()
+        self.bayer = _bayer_code(self.pf)
+        if self.bayer is not None and not self.debayer:
+            self.bayer_code = self.bayer
+        self.stream = c.create_stream(None, None)
+        payload = c.get_payload()
+        for _ in range(self.n_buffers):
+            self.stream.push_buffer(Aravis.Buffer.new_allocate(payload))
+        c.start_acquisition()
+
+    def _grab(self):
+        Arv = self.Arv
+        while self._run:
+            buf = self.stream.timeout_pop_buffer(1_000_000)  # us
+            if buf is None:
+                continue
+            try:
+                if buf.get_status() != Arv.BufferStatus.SUCCESS:
+                    self.stats.incomplete += 1
+                    continue
+                w, h = buf.get_image_width(), buf.get_image_height()
+                data = buf.get_data()  # bytes copy -> safe to re-queue the buffer
+                if self.pf in ("RGB8", "RGB8Packed"):
+                    return cv2.cvtColor(np.frombuffer(data, np.uint8, w * h * 3).reshape(h, w, 3), cv2.COLOR_RGB2BGR)
+                if self.pf in ("BGR8", "BGR8Packed"):
+                    return np.frombuffer(data, np.uint8, w * h * 3).reshape(h, w, 3).copy()
+                if self.pf.endswith("16") or self.pf.endswith("12") or self.pf.endswith("10"):
+                    img = (np.frombuffer(data, np.uint16, w * h).reshape(h, w) >> (int(self.pf[-2:]) - 8)).astype(np.uint8)
+                else:
+                    img = np.frombuffer(data, np.uint8, w * h).reshape(h, w)
+                if self.bayer is not None and self.debayer:
+                    return cv2.cvtColor(img, self.bayer)
+                return img.copy() if not img.flags.writeable else img
+            finally:
+                self.stream.push_buffer(buf)
+        return None
+
+    def _close(self):
+        try:
+            self.cam.stop_acquisition()
+        except Exception:
+            pass
+        # drop references now so Aravis releases GigE control (otherwise the camera stays locked
+        # until the heartbeat times out and the next start fails to grab frames for a few seconds)
+        self._last_stats = self.network_stats() if getattr(self, "stream", None) is not None else {}
+        self.stream = None
+        self.cam = None
+
+    def network_stats(self) -> dict:
+        """GigE stream counters: completed/failed buffers, underruns (host too slow -> no free buffer),
+        missing/resent packets (network problems: MTU, rmem_max, cable, switch)."""
+        s = self.stream
+        if s is None:
+            return getattr(self, "_last_stats", {})
+        if hasattr(s, "get_n_infos"):  # Aravis >= 0.8.11
+            names = [s.get_info_name(i) for i in range(s.get_n_infos())]
+            return {n: s.get_info_uint64_by_name(n) for n in names if n.startswith("n_")}
+        return {"statistics": tuple(s.get_statistics())}
+
+
 def csi_pipeline(sensor_id=0, width=1280, height=720, fps=60, flip=0) -> str:
     """Jetson CSI camera (IMX219/IMX477...) via the Argus ISP. NV12->BGRx runs on the VIC (hardware);
     the pipeline consumes BGRx (4-channel) frames directly, so no CPU videoconvert per frame."""
@@ -339,6 +458,18 @@ def open_camera(uri: str, **kw) -> Camera:
         return _gst(pipe, **kw)
     if uri.startswith("gst://"):  # any GStreamer pipeline producing BGR/GRAY8 (no sink)
         return _gst(uri[len("gst://"):], **kw)
+    if uri.startswith(("aravis://", "dalsa://")):
+        # dalsa://<device-id or IP>?pf=BayerRG8&w=1280&h=720&x=0&y=0&exp=800&fps=300&packet=8192&gain=0&debayer=0
+        from urllib.parse import parse_qs, unquote, urlparse
+        u = urlparse(uri)
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+        roi = None
+        if "w" in q and "h" in q:
+            roi = (int(q["w"]), int(q["h"]), int(q.get("x", 0)), int(q.get("y", 0)))
+        num = lambda k, f=float: f(q[k]) if k in q else None  # noqa: E731
+        return AravisCamera(unquote(u.netloc + u.path) or None, pixel_format=q.get("pf"), roi=roi,
+                            exposure_us=num("exp"), fps=num("fps"), packet_size=num("packet", int),
+                            gain_db=num("gain"), debayer=q.get("debayer", "0") == "1", **kw)
     if uri.startswith("pylon://"):
         return PylonCamera(**kw)
     if uri.startswith("genicam://"):

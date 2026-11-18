@@ -44,4 +44,7 @@ except Exception as e:
     print("PyGObject/GStreamer problem:", e)
 EOF
 python3 -m pytest -q tests || true
-echo "next: copy models/pigeon.f32.onnx here, then: python3 scripts/build_trt.py"
+python3 -c "import gi; gi.require_version('Aravis', '0.8')" 2>/dev/null && echo "aravis 0.8 OK" || \
+  echo "Aravis 0.8 missing -> DALSA/GigE camera: build it, see docs/DALSA.md"
+echo "next: sudo bash scripts/gige_tune.sh eth0 192.168.10.1/24   (DALSA camera network)"
+echo "      copy models/pigeon.f32.onnx here, then: python3 scripts/build_trt.py"

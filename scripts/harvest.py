@@ -43,7 +43,7 @@ def main():
                 todo = tr.update(md.detect(frame), f)
                 if todo:
                     boxes = [tr.tracks[i].box for i in todo]
-                    for tid, c in zip(todo, square_crops(frame, np.array(boxes), a.size)):
+                    for tid, c in zip(todo, square_crops(frame, np.array(boxes), a.size, bayer=cam.bayer_code)):
                         # file name groups crops by video+track -> split train/val by track, not by frame
                         cv2.imwrite(os.path.join(a.out, f"{tag}_t{tid:05d}_f{f:06d}.jpg"), c)
                         tr.feed(tid, 0.5, f)

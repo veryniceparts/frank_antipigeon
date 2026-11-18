@@ -59,6 +59,7 @@ tuned for 4 crops. `build_trt.py` writes `pigeon.json` next to the engine with t
 
 | camera | `--source` | notes |
 |---|---|---|
+| **Teledyne DALSA Genie Nano (GigE)** | `dalsa://<ip>?pf=BayerRG8&w=1280&h=480&exp=800&fps=300` | Aravis, raw-Bayer path; see [DALSA.md](DALSA.md) for setup and the bandwidth/fps table |
 | CSI (IMX219 / IMX477) | `csi://0?w=1280&h=720&fps=120` | Argus ISP → VIC hardware converts NV12→BGRx, and the pipeline uses the **BGRx frames directly** (no CPU colour conversion). IMX219 tops out at 1280×720@120 |
 | USB UVC, MJPG | `gst://v4l2src device=/dev/video0 io-mode=2 ! image/jpeg,width=1280,height=720,framerate=60/1 ! nvv4l2decoder mjpeg=1 ! nvvidconv ! video/x-raw,format=BGRx` | hardware JPEG decode; `--source 0` would decode MJPG on the CPU |
 | USB3 / GigE Basler | `pylon://` | `pip install pypylon` (aarch64 wheels). Use Mono8/Bayer8 and a small ROI |
