@@ -244,6 +244,8 @@ def main():
     meta = {"arch": a.arch, "size": a.size, "threshold": thr, "val_bal_acc": float(best),
             "val_precision_recall": pr, "n_train": len(tr), "n_val": len(va)}
     export_onnx(model.net, mean, std, a.size, a.out, meta)
+    trt_onnx = os.path.splitext(a.out)[0] + ".f32.onnx"  # float input -> build TensorRT engine from this
+    export_onnx(model.net, mean, std, a.size, trt_onnx, meta, float_input=True)
     torch.save({"state_dict": model.net.state_dict(), "meta": meta}, os.path.splitext(a.out)[0] + ".pt")
 
     # parity + latency check with ONNX Runtime

@@ -16,7 +16,7 @@ class MotionDetector:
         self,
         scale: int = 4,             # process at 1/scale resolution
         fps: float = 100.0,         # camera rate, sets CNT background memory
-        method: str = "auto",       # auto | cnt | mog2 | diff
+        method: str = "auto",       # auto | cnt | avg | mog2 | diff
         min_area: int = 12,         # px on the *downscaled* mask
         max_area_frac: float = 0.2, # bigger blobs = lighting change / camera shake -> ignore
         merge_gap: int = 2,         # px (downscaled): merge boxes closer than this (flapping wings)
@@ -26,6 +26,9 @@ class MotionDetector:
         self.s = int(scale)
         self.min_area, self.max_area_frac, self.merge_gap = min_area, max_area_frac, merge_gap
         if method == "auto":
+            # CNT needs opencv-contrib. Fallback MOG2 (core OpenCV, ~2.5x slower) because it also
+            # copes with swaying foliage; "avg" is as fast as CNT but flags tree edges (precision
+            # 0.60 vs 0.87 CNT / 0.85 MOG2 on the synthetic scene) -> only with an --ignore-mask
             method = "cnt" if hasattr(cv2, "bgsegm") else "mog2"
         self.method = method
         if method == "cnt":
@@ -36,6 +39,9 @@ class MotionDetector:
             self.bg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=var_threshold, detectShadows=False)
         elif method == "diff":
             self.bg, self._prev = None, None
+        elif method == "avg":
+            # exponential running average; time constant ~0.5 s regardless of fps
+            self.bg, self._bgf, self.alpha = None, None, min(0.2, 2.0 / max(fps, 1.0))
         else:
             raise ValueError(method)
         self.k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -44,7 +50,8 @@ class MotionDetector:
         self.mask = None  # last foreground mask (downscaled), for debugging
 
     def _small(self, frame: np.ndarray) -> np.ndarray:
-        g = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        g = frame if frame.ndim == 2 else cv2.cvtColor(
+            frame, cv2.COLOR_BGRA2GRAY if frame.shape[2] == 4 else cv2.COLOR_BGR2GRAY)
         if self.s > 1:  # gray first, then INTER_LINEAR (INTER_AREA is ~9x slower)
             g = cv2.resize(g, (g.shape[1] // self.s, g.shape[0] // self.s), interpolation=cv2.INTER_LINEAR)
         return cv2.GaussianBlur(g, (5, 5), 0)
@@ -57,6 +64,17 @@ class MotionDetector:
             if prev is None:
                 return np.zeros((0, 4), np.int32)
             _, m = cv2.threshold(cv2.absdiff(small, prev), 15, 255, cv2.THRESH_BINARY)
+        elif self.method == "avg":
+            if self._bgf is None:
+                self._bgf = small.astype(np.float32)
+                return np.zeros((0, 4), np.int32)
+            _, m = cv2.threshold(cv2.absdiff(small, cv2.convertScaleAbs(self._bgf)), 15, 255, cv2.THRESH_BINARY)
+            # selective update: learn background only where nothing moves (an unmasked average
+            # absorbs the bird and leaves ghost trails); a 20x slower update everywhere lets
+            # real scene changes (parked object, light) fade into the background
+            moving = cv2.dilate(m, self.k, iterations=2)
+            cv2.accumulateWeighted(small, self._bgf, self.alpha, mask=cv2.bitwise_not(moving))
+            cv2.accumulateWeighted(small, self._bgf, self.alpha * 0.05, mask=moving)
         else:
             m = self.bg.apply(small)
             if self.method == "mog2":
@@ -127,6 +145,8 @@ def square_crops(frame: np.ndarray, boxes: np.ndarray, size: int, pad: float = 0
         a0, b0 = cx - side // 2, cy - side // 2
         a1, b1 = a0 + side, b0 + side
         c = frame[max(0, b0):min(H, b1), max(0, a0):min(W, a1)]
+        if ch == 4:
+            c = c[..., :3]  # BGRx camera frames: drop the padding channel
         if a0 < 0 or b0 < 0 or a1 > W or b1 > H:
             c = cv2.copyMakeBorder(c, max(0, -b0), max(0, b1 - H), max(0, -a0), max(0, a1 - W), cv2.BORDER_REPLICATE)
         interp = cv2.INTER_AREA if side > size else cv2.INTER_LINEAR

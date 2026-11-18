@@ -49,11 +49,13 @@ class Deploy(nn.Module):
         return torch.sigmoid(self.net((x - self.m) / self.s)).reshape(-1)
 
 
-def export_onnx(net: nn.Module, mean, std, size: int, path: str, meta: dict | None = None):
+def export_onnx(net: nn.Module, mean, std, size: int, path: str, meta: dict | None = None,
+                float_input: bool = False):
+    """float_input=True: input is float32 NHWC BGR in 0..255 (for TensorRT 8.5 on JetPack 5)."""
     import json
     import onnx
     d = Deploy(net.eval(), mean, std).eval()
-    x = torch.zeros(2, size, size, 3, dtype=torch.uint8)
+    x = torch.zeros(2, size, size, 3, dtype=torch.float32 if float_input else torch.uint8)
     torch.onnx.export(d, (x,), path, opset_version=17, input_names=["crops"], output_names=["p_pigeon"],
                       dynamic_axes={"crops": {0: "n"}, "p_pigeon": {0: "n"}}, dynamo=False)
     m = onnx.load(path)

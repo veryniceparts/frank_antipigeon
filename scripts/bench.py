@@ -38,7 +38,7 @@ def bench_motion(w, h, n=300):
     rng = np.random.default_rng(0)
     bg = rng.integers(60, 200, (h, w, 3), dtype=np.uint8)
     bg = cv2.GaussianBlur(bg, (31, 31), 0)
-    for method in ("cnt", "mog2", "diff"):
+    for method in ("cnt", "avg", "mog2", "diff"):
         if method == "cnt" and not hasattr(cv2, "bgsegm"):
             continue
         for scale in (1, 2, 4):

@@ -18,12 +18,13 @@ from pigeonkit import IoUTracker, MotionDetector, PigeonPipeline, draw, load_cla
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--source", default="0", help="camera index | video file | rtsp:// | pylon:// | genicam://<cti>")
-    ap.add_argument("--model", default="models/pigeon.onnx", help=".onnx student or iNat .tflite teacher")
+    ap.add_argument("--source", default="0", help="camera index | video file | rtsp:// | csi://0?w=1280&h=720&fps=120 | gst://<pipeline> | "
+                         "pylon:// | genicam://<cti>")
+    ap.add_argument("--model", default="models/pigeon.onnx", help=".engine (TensorRT, Jetson) | .onnx student | iNat .tflite teacher")
     ap.add_argument("--threshold", type=float, default=None, help="override model threshold")
     ap.add_argument("--scale", type=int, default=4, help="motion detection downscale factor")
     ap.add_argument("--fps", type=float, default=100, help="nominal camera fps (background memory)")
-    ap.add_argument("--method", default="auto", choices=["auto", "cnt", "mog2", "diff"])
+    ap.add_argument("--method", default="auto", choices=["auto", "cnt", "avg", "mog2", "diff"])
     ap.add_argument("--min-area", type=int, default=12, help="min blob area on downscaled mask")
     ap.add_argument("--ignore-mask", default=None, help="png, white = ignore region")
     ap.add_argument("--show", action="store_true")

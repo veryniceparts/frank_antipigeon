@@ -70,7 +70,12 @@ class PigeonPipeline:
 
 
 def draw(frame: np.ndarray, dets: list[Detection], show_all: bool = True, fps: float | None = None) -> np.ndarray:
-    out = frame if frame.ndim == 3 else cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    if frame.ndim == 2:
+        out = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    elif frame.shape[2] == 4:
+        out = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+    else:
+        out = frame
     for d in dets:
         if not d.pigeon and not show_all:
             continue

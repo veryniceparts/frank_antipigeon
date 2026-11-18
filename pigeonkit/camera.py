@@ -130,9 +130,10 @@ class Camera:
 class OpenCVCamera(Camera):
     """UVC/V4L2 cameras, video files, RTSP. For files use latest_only=False."""
 
-    def __init__(self, src, width=None, height=None, fps=None, fourcc="MJPG", latest_only=True):
+    def __init__(self, src, width=None, height=None, fps=None, fourcc="MJPG", latest_only=True, api=None):
         super().__init__(latest_only)
         self.src, self.width, self.height, self.fps, self.fourcc = src, width, height, fps, fourcc
+        self.api = api
         self.cap = None
 
     def _open(self):
@@ -147,10 +148,16 @@ class OpenCVCamera(Camera):
             if self.fps:
                 self.cap.set(cv2.CAP_PROP_FPS, self.fps)
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        elif self.api is not None:
+            self.cap = cv2.VideoCapture(self.src, self.api)
         else:
             self.cap = cv2.VideoCapture(self.src)
         if not self.cap.isOpened():
-            raise RuntimeError(f"cannot open {self.src!r}")
+            hint = ""
+            if self.api == cv2.CAP_GSTREAMER and "GStreamer:                   YES" not in cv2.getBuildInformation():
+                hint = (" -- this OpenCV has no GStreamer. On Jetson use JetPack's system OpenCV "
+                        "(pip uninstall opencv-python* opencv-contrib-python*)")
+            raise RuntimeError(f"cannot open {self.src!r}{hint}")
 
     def _grab(self):
         ok, f = self.cap.read()
@@ -238,6 +245,18 @@ class HarvestersCamera(Camera):
             pass
 
 
+def _gst(desc: str, **kw) -> Camera:
+    """Prefer PyGObject; fall back to OpenCV's GStreamer backend (needs a GStreamer-enabled cv2)."""
+    try:
+        import gi  # noqa: F401
+        return GstCamera(desc)
+    except ImportError:
+        if desc.rstrip().endswith("format=BGRx"):  # OpenCV's appsink wants BGR
+            desc += " ! videoconvert ! video/x-raw,format=BGR"
+        return OpenCVCamera(desc + " ! appsink drop=true max-buffers=1 sync=false",
+                            api=cv2.CAP_GSTREAMER, latest_only=True, **kw)
+
+
 def _bayer_code(fmt: str):
     # GenICam BayerRG8 == OpenCV COLOR_BayerRG2BGR in OpenCV>=4 naming. Verify with a test image.
     return {
@@ -246,7 +265,78 @@ def _bayer_code(fmt: str):
     }.get(fmt)
 
 
+class GstCamera(Camera):
+    """GStreamer capture through PyGObject (python3-gi, preinstalled on JetPack).
+
+    Independent of how OpenCV was built, so pip's opencv-contrib (CNT background subtractor)
+    can be used together with Jetson CSI cameras. ``desc`` is a pipeline WITHOUT the sink;
+    it must output video/x-raw with format BGR, BGRx (4-channel, used as-is) or GRAY8.
+    """
+
+    def __init__(self, desc: str, **_):
+        super().__init__(latest_only=True)
+        self.desc = desc
+
+    def _open(self):
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+        self.Gst = Gst
+        Gst.init(None)
+        self.pipe = Gst.parse_launch(
+            f"{self.desc} ! appsink name=pk_sink emit-signals=false max-buffers=1 drop=true sync=false")
+        self.sink = self.pipe.get_by_name("pk_sink")
+        if self.pipe.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+            raise RuntimeError(f"cannot start GStreamer pipeline: {self.desc}")
+
+    def _grab(self):
+        Gst = self.Gst
+        while self._run or not self.latest_only:
+            sample = self.sink.emit("try-pull-sample", Gst.SECOND)
+            if sample is None:
+                if self.sink.get_property("eos"):
+                    return None
+                continue  # timeout: keep waiting unless stopped
+            s = sample.get_caps().get_structure(0)
+            w, h = s.get_value("width"), s.get_value("height")
+            ch = {"GRAY8": 1, "BGRx": 4, "BGRA": 4}.get(s.get_value("format"), 3)
+            buf = sample.get_buffer()
+            ok, info = buf.map(Gst.MapFlags.READ)
+            if not ok:
+                continue
+            try:
+                stride = info.size // h  # rows may be padded
+                a = np.frombuffer(info.data, np.uint8, count=stride * h).reshape(h, stride)[:, : w * ch]
+                return a.reshape(h, w, ch).copy() if ch > 1 else a.copy()
+            finally:
+                buf.unmap(info)
+        return None
+
+    def _close(self):
+        try:
+            self.pipe.set_state(self.Gst.State.NULL)
+        except Exception:
+            pass
+
+
+def csi_pipeline(sensor_id=0, width=1280, height=720, fps=60, flip=0) -> str:
+    """Jetson CSI camera (IMX219/IMX477...) via the Argus ISP. NV12->BGRx runs on the VIC (hardware);
+    the pipeline consumes BGRx (4-channel) frames directly, so no CPU videoconvert per frame."""
+    return (f"nvarguscamerasrc sensor-id={sensor_id} ! "
+            f"video/x-raw(memory:NVMM),width={width},height={height},framerate={fps}/1,format=NV12 ! "
+            f"nvvidconv flip-method={flip} ! video/x-raw,format=BGRx")
+
+
 def open_camera(uri: str, **kw) -> Camera:
+    if uri.startswith("csi://"):
+        # csi://0?w=1280&h=720&fps=120&flip=0   (IMX219: 1280x720@120 is its fastest mode)
+        from urllib.parse import parse_qs, urlparse
+        u = urlparse(uri)
+        q = {k: int(v[0]) for k, v in parse_qs(u.query).items()}
+        pipe = csi_pipeline(int(u.netloc or 0), q.get("w", 1280), q.get("h", 720), q.get("fps", 60), q.get("flip", 0))
+        return _gst(pipe, **kw)
+    if uri.startswith("gst://"):  # any GStreamer pipeline producing BGR/GRAY8 (no sink)
+        return _gst(uri[len("gst://"):], **kw)
     if uri.startswith("pylon://"):
         return PylonCamera(**kw)
     if uri.startswith("genicam://"):

@@ -1,13 +1,14 @@
 """pigeonkit: fast moving-object -> pigeon classifier pipeline."""
-from .camera import open_camera, Camera, OpenCVCamera, PylonCamera, HarvestersCamera
+from .camera import open_camera, Camera, OpenCVCamera, GstCamera, PylonCamera, HarvestersCamera, csi_pipeline
 from .motion import MotionDetector, square_crops, merge_boxes
 from .tracker import IoUTracker
-from .classifier import OnnxPigeonClassifier, INatBirdClassifier, load_classifier, download_teacher
+from .classifier import (OnnxPigeonClassifier, INatBirdClassifier, TensorRTPigeonClassifier,
+                         load_classifier, download_teacher)
 from .pipeline import PigeonPipeline, Detection, draw
 
 __all__ = [
-    "open_camera", "Camera", "OpenCVCamera", "PylonCamera", "HarvestersCamera",
+    "open_camera", "Camera", "OpenCVCamera", "GstCamera", "csi_pipeline", "PylonCamera", "HarvestersCamera",
     "MotionDetector", "square_crops", "merge_boxes", "IoUTracker",
-    "OnnxPigeonClassifier", "INatBirdClassifier", "load_classifier", "download_teacher",
+    "OnnxPigeonClassifier", "INatBirdClassifier", "TensorRTPigeonClassifier", "load_classifier", "download_teacher",
     "PigeonPipeline", "Detection", "draw",
 ]

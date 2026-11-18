@@ -16,6 +16,10 @@ Measured on a 4-core 2.1 GHz Xeon, CPU only, one ONNX thread: the whole pipeline
 classification 0.05 ms per frame on average). Because of the tracker, each object is classified
 a few times, not on every frame.
 
+**Target hardware: Jetson Xavier NX.** See [docs/JETSON.md](docs/JETSON.md) for the TensorRT engine, CSI/USB/GigE cameras,
+power mode and setup. In short: train on a PC, copy `pigeon.f32.onnx` to the Jetson, run `scripts/build_trt.py` there,
+then `run.py --model models/pigeon.engine`.
+
 ## Quick start
 
 ```bash
@@ -48,6 +52,8 @@ python scripts/run.py --source clip.mp4 --model models/pigeon.onnx --out runs/an
 Other tools:
 - `scripts/bench.py`: latency per model, thread count and batch size; motion-stage timings; `--compare` checks fp32 vs int8 accuracy.
 - `scripts/quantize.py`: INT8 static QDQ quantization calibrated on real crops. Benchmark before using it: on CPUs without VNNI, int8 was *slower* for the tiny net (0.21 vs 0.07 ms).
+- `scripts/build_trt.py`: builds the TensorRT engine on the Jetson from `*.f32.onnx`, for the GPU or `--dla 0`.
+- `scripts/jetson_setup.sh`: one-time Xavier NX setup.
 - `scripts/evaluate.py`: precision/recall of the whole pipeline against a ground-truth csv.
 - `scripts/make_synthetic.py`: synthetic scene of pigeons, crows, sparrows, leaves and a swaying tree, for smoke tests. Not real data.
 
@@ -64,6 +70,8 @@ the model's threshold. `train.py` chooses that threshold for ≥98% validation p
 | `0`, `1` … | OpenCV V4L2/UVC, MJPG, buffer size 1, threaded |
 | `file.mp4` | every frame, no drops (offline) |
 | `rtsp://…` | OpenCV, newest frame only |
+| `csi://0?w=1280&h=720&fps=120` | Jetson CSI camera through PyGObject GStreamer; uses BGRx frames directly (no CPU colour conversion) |
+| `gst://<pipeline>` | any GStreamer pipeline that outputs BGR, BGRx or GRAY8, e.g. USB MJPG with Jetson hardware decoding |
 | `pylon://` | Basler pypylon, `GrabStrategy_LatestImageOnly`, Mono8/Bayer8, ROI |
 | `genicam://<path.cti>` | any GenICam camera through harvesters |
 
@@ -82,6 +90,7 @@ High-speed tips:
 | `lcnet_050.ra2_in1k` (default) | 96 | 0.43 / 0.39 | ImageNet-pretrained, best for small datasets |
 | `mobilenetv3_small_050.lamb_in1k` | 96 | ~0.35 | alternative |
 | `mobilenetv4_conv_small_050.e3000_r224_in1k` | 96 | ~0.41 | if accuracy plateaus |
+| same student as a TensorRT FP16 `.engine` | 64/96 | measure on the device | Jetson GPU or DLA; `scripts/build_trt.py` |
 | iNat MobileNetV2 TFLite (teacher) | 224 | 5–8 | zero-training; ~1 ms on a Coral EdgeTPU (`*_edgetpu.tflite`) |
 
 The ONNX student takes **raw uint8 BGR crops (N,S,S,3)**. BGR→RGB conversion and normalisation are

@@ -18,7 +18,7 @@ def moving_square_frames(n=60, W=320, H=240):
         yield cv2.add(f, rng.integers(0, 4, f.shape, dtype=np.uint8)), (x, 100, x + 24, 124)
 
 
-@pytest.mark.parametrize("method", ["mog2", "diff"] + (["cnt"] if hasattr(cv2, "bgsegm") else []))
+@pytest.mark.parametrize("method", ["mog2", "diff", "avg"] + (["cnt"] if hasattr(cv2, "bgsegm") else []))
 def test_motion_finds_moving_square(method):
     md = MotionDetector(scale=2, method=method, min_area=4)
     hits = 0
@@ -42,6 +42,9 @@ def test_square_crops_edges():
     assert c.shape == (2, 64, 64, 3) and c.dtype == np.uint8
     g = square_crops(f[..., 0], np.array([[10, 10, 20, 20]]), 32)
     assert g.shape == (1, 32, 32, 3)
+    bgrx = np.dstack([f, np.full(f.shape[:2], 255, np.uint8)])  # Jetson BGRx frames
+    assert np.array_equal(square_crops(bgrx, np.array([[0, 0, 30, 10]]), 64), c[:1])
+    assert len(MotionDetector(scale=2).detect(bgrx)) == 0
 
 
 def test_tracker_ema_and_schedule():
@@ -89,3 +92,17 @@ def test_onnx_export_roundtrip(tmp_path):
     x = np.random.randint(0, 255, (5, 48, 48, 3), np.uint8)
     ref = Deploy(net, (0.5, 0.5, 0.5), (0.25, 0.25, 0.25)).eval()(torch.from_numpy(x)).detach().numpy()
     assert np.allclose(clf(x), ref, atol=1e-5)
+
+
+def test_gst_camera_bgrx_and_gray():
+    gi = pytest.importorskip("gi")
+    gi.require_version("Gst", "1.0")
+    from gi.repository import Gst
+    Gst.init(None)
+    if Gst.ElementFactory.find("videotestsrc") is None:
+        pytest.skip("videotestsrc not available")
+    from pigeonkit import open_camera
+    with open_camera("gst://videotestsrc num-buffers=3 ! video/x-raw,width=64,height=48,format=BGRx") as cam:
+        assert cam.read()[2].shape == (48, 64, 4)
+    with open_camera("gst://videotestsrc num-buffers=3 ! video/x-raw,width=66,height=10,format=GRAY8") as cam:
+        assert cam.read()[2].shape == (10, 66)  # padded row stride handled

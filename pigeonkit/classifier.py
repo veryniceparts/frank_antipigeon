@@ -2,6 +2,7 @@
 
 * OnnxPigeonClassifier  - the fast student (scripts/train.py). Preprocessing (BGR->RGB,
   normalisation) is baked into the ONNX graph, so input is raw uint8 crops. ~0.1-0.4 ms/crop.
+* TensorRTPigeonClassifier - same student as a TensorRT FP16 engine (Jetson GPU / DLA).
 * INatBirdClassifier    - zero-training teacher: Google's MobileNetV2 iNaturalist-birds
   TFLite (964 species + background, Apache-2.0). P(pigeon) = Rock Pigeon + Feral Pigeon
   (+ Wood-Pigeon). ~5 ms/crop on CPU, ~1 ms on a Coral EdgeTPU.
@@ -31,10 +32,11 @@ class OnnxPigeonClassifier:
         # tiny models: 1 thread is fastest (thread wake-up dominates); batch crops instead
         so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
-        providers = [p for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider", "OpenVINOExecutionProvider")
-                     if p in ort.get_available_providers()] + ["CPUExecutionProvider"]
-        if os.environ.get("PIGEON_CPU_ONLY"):
-            providers = ["CPUExecutionProvider"]
+        # CPU by default: for tiny models a GPU launch + copies costs more than the compute.
+        # On Jetson use the native TensorRT engine (TensorRTPigeonClassifier) instead.
+        # Override e.g.  PIGEON_ORT_PROVIDERS=CUDAExecutionProvider,CPUExecutionProvider
+        env = os.environ.get("PIGEON_ORT_PROVIDERS")
+        providers = env.split(",") if env else ["CPUExecutionProvider"]
         self.sess = ort.InferenceSession(path, so, providers=providers)
         inp = self.sess.get_inputs()[0]
         self.input_name = inp.name
@@ -81,8 +83,140 @@ class INatBirdClassifier:
         return np.array([self.probs(c)[self.idx].sum() for c in crops], np.float32)
 
 
+class _CudaRT:
+    """Minimal ctypes binding to libcudart (always present on JetPack) -> no pycuda/cuda-python needed."""
+
+    H2D, D2H = 1, 2
+
+    def __init__(self):
+        import ctypes
+        self.ct = ctypes
+        for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0", "/usr/local/cuda/lib64/libcudart.so"):
+            try:
+                self.lib = ctypes.CDLL(name)
+                break
+            except OSError:
+                continue
+        else:
+            raise RuntimeError("libcudart not found (is CUDA installed / LD_LIBRARY_PATH set?)")
+
+    def _ok(self, r, what):
+        if r != 0:
+            raise RuntimeError(f"{what} failed with CUDA error {r}")
+
+    def malloc(self, n):
+        p = self.ct.c_void_p()
+        self._ok(self.lib.cudaMalloc(self.ct.byref(p), self.ct.c_size_t(n)), "cudaMalloc")
+        return p.value
+
+    def malloc_host(self, n, dtype, shape):
+        """Pinned host buffer exposed as a numpy array (fast async DMA)."""
+        p = self.ct.c_void_p()
+        self._ok(self.lib.cudaMallocHost(self.ct.byref(p), self.ct.c_size_t(n)), "cudaMallocHost")
+        buf = (self.ct.c_uint8 * n).from_address(p.value)
+        return p.value, np.frombuffer(buf, dtype=dtype).reshape(shape)
+
+    def stream(self):
+        s = self.ct.c_void_p()
+        self._ok(self.lib.cudaStreamCreate(self.ct.byref(s)), "cudaStreamCreate")
+        return s.value
+
+    def copy(self, dst, src, n, kind, stream):
+        self._ok(self.lib.cudaMemcpyAsync(self.ct.c_void_p(dst), self.ct.c_void_p(src), self.ct.c_size_t(n),
+                                          self.ct.c_int(kind), self.ct.c_void_p(stream)), "cudaMemcpyAsync")
+
+    def sync(self, stream):
+        self._ok(self.lib.cudaStreamSynchronize(self.ct.c_void_p(stream)), "cudaStreamSynchronize")
+
+
+class TensorRTPigeonClassifier:
+    """Native TensorRT engine (Jetson). Build it ON the device: scripts/build_trt.py.
+
+    Engine input: NHWC BGR crops with dynamic batch (uint8 or float32 0..255, auto-detected);
+    output P(pigeon). Batches larger than the engine's max profile are split.
+    Supports TensorRT 8.5+ (execute_async_v3) and older bindings API (execute_async_v2).
+    """
+
+    def __init__(self, path: str, threshold: float | None = None, **_):
+        import tensorrt as trt
+        self.trt = trt
+        logger = trt.Logger(trt.Logger.WARNING)
+        trt.init_libnvinfer_plugins(logger, "")
+        with open(path, "rb") as fh:
+            self.engine = trt.Runtime(logger).deserialize_cuda_engine(fh.read())
+        if self.engine is None:
+            raise RuntimeError(f"cannot deserialize {path}: engines are specific to the GPU + TensorRT "
+                               "version they were built with -> rebuild on this device (scripts/build_trt.py)")
+        self.ctx = self.engine.create_execution_context()
+        self.v3 = hasattr(self.engine, "num_io_tensors") and hasattr(self.ctx, "execute_async_v3")
+        if self.v3:
+            names = [self.engine.get_tensor_name(i) for i in range(self.engine.num_io_tensors)]
+            ins = [n for n in names if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT]
+            self.in_name, self.out_name = ins[0], [n for n in names if n not in ins][0]
+            in_shape = tuple(self.engine.get_tensor_shape(self.in_name))
+            self.in_dtype = np.dtype(trt.nptype(self.engine.get_tensor_dtype(self.in_name)))
+            self.out_dtype = np.dtype(trt.nptype(self.engine.get_tensor_dtype(self.out_name)))
+            prof = self.engine.get_tensor_profile_shape(self.in_name, 0) if hasattr(self.engine, "get_tensor_profile_shape") \
+                else self.engine.get_profile_shape(0, self.in_name)
+        else:
+            self.in_idx = [i for i in range(self.engine.num_bindings) if self.engine.binding_is_input(i)][0]
+            self.out_idx = 1 - self.in_idx
+            in_shape = tuple(self.engine.get_binding_shape(self.in_idx))
+            self.in_dtype = np.dtype(trt.nptype(self.engine.get_binding_dtype(self.in_idx)))
+            self.out_dtype = np.dtype(trt.nptype(self.engine.get_binding_dtype(self.out_idx)))
+            prof = self.engine.get_profile_shape(0, self.in_idx)
+        self.size = int(in_shape[1])
+        self.max_batch = int(prof[2][0])
+        meta = {}
+        side = os.path.splitext(path)[0] + ".json"
+        if os.path.exists(side):
+            with open(side) as fh:
+                meta = json.load(fh)
+        self.meta = meta
+        self.threshold = threshold if threshold is not None else float(meta.get("threshold", 0.5))
+
+        self.cuda = _CudaRT()
+        self.stream = self.cuda.stream()
+        S, B = self.size, self.max_batch
+        self.in_bytes_per = S * S * 3 * self.in_dtype.itemsize
+        self.h_in_ptr, self.h_in = self.cuda.malloc_host(B * self.in_bytes_per, self.in_dtype, (B, S, S, 3))
+        self.h_out_ptr, self.h_out = self.cuda.malloc_host(B * self.out_dtype.itemsize, self.out_dtype, (B,))
+        self.d_in = self.cuda.malloc(B * self.in_bytes_per)
+        self.d_out = self.cuda.malloc(B * self.out_dtype.itemsize)
+        if self.v3:
+            self.ctx.set_tensor_address(self.in_name, self.d_in)
+            self.ctx.set_tensor_address(self.out_name, self.d_out)
+        else:
+            self.bindings = [0, 0]
+            self.bindings[self.in_idx], self.bindings[self.out_idx] = self.d_in, self.d_out
+
+    def _run(self, crops):
+        n, S = len(crops), self.size
+        self.h_in[:n] = crops  # uint8 -> engine dtype cast happens here if needed
+        if self.v3:
+            self.ctx.set_input_shape(self.in_name, (n, S, S, 3))
+        else:
+            self.ctx.set_binding_shape(self.in_idx, (n, S, S, 3))
+        self.cuda.copy(self.d_in, self.h_in_ptr, n * self.in_bytes_per, _CudaRT.H2D, self.stream)
+        ok = self.ctx.execute_async_v3(self.stream) if self.v3 else \
+            self.ctx.execute_async_v2(self.bindings, self.stream)
+        if not ok:
+            raise RuntimeError("TensorRT execution failed")
+        self.cuda.copy(self.h_out_ptr, self.d_out, n * self.out_dtype.itemsize, _CudaRT.D2H, self.stream)
+        self.cuda.sync(self.stream)
+        return self.h_out[:n].astype(np.float32)
+
+    def __call__(self, crops: np.ndarray) -> np.ndarray:
+        if len(crops) == 0:
+            return np.zeros(0, np.float32)
+        B = self.max_batch
+        return np.concatenate([self._run(crops[i:i + B]) for i in range(0, len(crops), B)])
+
+
 def load_classifier(path: str, **kw):
     kw = {k: v for k, v in kw.items() if v is not None}
+    if path.endswith((".engine", ".plan", ".trt")):
+        return TensorRTPigeonClassifier(path, **kw)
     if path.endswith(".tflite"):
         return INatBirdClassifier(path, **{k: v for k, v in kw.items() if k in ("threads", "threshold")})
     return OnnxPigeonClassifier(path, **kw)
