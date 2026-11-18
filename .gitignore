@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+data/
+runs/
+*.mp4
+*.avi
+models/*.tflite
+models/*.onnx
+!models/.gitkeep
