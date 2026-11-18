@@ -2,8 +2,10 @@
 numpy>=1.24
 opencv-contrib-python-headless>=4.8   # contrib -> cv2.bgsegm CNT background subtractor (fastest)
 onnxruntime>=1.17
-# optional: zero-training teacher model (iNat birds TFLite)
+# zero-training teacher (iNat birds TFLite) + SSD bird detector
 ai-edge-litert>=1.0
+# YouTube / web videos for examples/youtube_detect.py
+yt-dlp
 # training / export (not needed on the device)
 torch>=2.2
 torchvision>=0.17

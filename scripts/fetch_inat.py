@@ -17,10 +17,11 @@ import time
 import urllib.parse
 import urllib.request
 
-POS = ["Columba livia", "Columba palumbus"]  # wood pigeon counts as pigeon, as in the teacher
-# hard negatives: doves, other city birds, birds of similar size/colour
-NEG = ["Streptopelia decaocto", "Streptopelia senegalensis", "Zenaida macroura",
-       "Corvus corone", "Corvus brachyrhynchos", "Corvus monedula", "Pica pica", "Larus argentatus",
+# positives = pigeons AND doves (Columbidae), matching the teacher's default target "columbidae"
+POS = ["Columba livia", "Columba palumbus", "Streptopelia decaocto", "Streptopelia turtur",
+       "Streptopelia senegalensis", "Spilopelia chinensis", "Zenaida macroura", "Columbina inca"]
+# hard negatives: other city birds and birds of similar size/colour
+NEG = ["Corvus corone", "Corvus brachyrhynchos", "Corvus monedula", "Pica pica", "Larus argentatus",
        "Chroicocephalus ridibundus", "Passer domesticus", "Sturnus vulgaris", "Turdus merula",
        "Accipiter nisus", "Falco tinnunculus", "Psittacula krameri", "Myiopsitta monachus"]
 API = "https://api.inaturalist.org/v1/observations"
@@ -82,8 +83,8 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "ATTRIBUTION.csv"), "a", newline="") as fh:
         att = csv.writer(fh)
-        for t in POS:
-            fetch(t, a.per_taxon, os.path.join(a.out, "pigeon"), a.size, att)
+        for i, t in enumerate(POS):  # most images for the city pigeon, fewer for each dove species
+            fetch(t, a.per_taxon if i == 0 else a.neg_per_taxon, os.path.join(a.out, "pigeon"), a.size, att)
         for t in NEG:
             fetch(t, a.neg_per_taxon, os.path.join(a.out, "not_pigeon"), a.size, att)
 

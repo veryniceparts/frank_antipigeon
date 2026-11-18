@@ -5,10 +5,12 @@ from .tracker import IoUTracker
 from .classifier import (OnnxPigeonClassifier, INatBirdClassifier, TensorRTPigeonClassifier,
                          load_classifier, download_teacher)
 from .pipeline import PigeonPipeline, Detection, draw
+from .detector import SSDBirdDetector
+from . import youtube
 
 __all__ = [
     "open_camera", "Camera", "OpenCVCamera", "GstCamera", "AravisCamera", "csi_pipeline", "PylonCamera", "HarvestersCamera",
     "MotionDetector", "square_crops", "merge_boxes", "IoUTracker",
     "OnnxPigeonClassifier", "INatBirdClassifier", "TensorRTPigeonClassifier", "load_classifier", "download_teacher",
-    "PigeonPipeline", "Detection", "draw",
+    "PigeonPipeline", "Detection", "draw", "SSDBirdDetector", "youtube",
 ]

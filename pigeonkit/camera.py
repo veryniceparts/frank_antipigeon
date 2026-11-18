@@ -133,13 +133,20 @@ class Camera:
 
 
 class OpenCVCamera(Camera):
-    """UVC/V4L2 cameras, video files, RTSP. For files use latest_only=False."""
+    """UVC/V4L2 cameras, video files, RTSP, http(s) media URLs.
 
-    def __init__(self, src, width=None, height=None, fps=None, fourcc="MJPG", latest_only=True, api=None):
-        super().__init__(latest_only)
+    realtime=True replays a file/URL at its native fps like a live camera: frames are released on
+    the video's clock and, with latest_only, whatever the detector can't keep up with is dropped.
+    """
+
+    def __init__(self, src, width=None, height=None, fps=None, fourcc="MJPG", latest_only=True, api=None,
+                 realtime=False):
+        super().__init__(latest_only or realtime)
         self.src, self.width, self.height, self.fps, self.fourcc = src, width, height, fps, fourcc
         self.api = api
+        self.realtime = realtime
         self.cap = None
+        self.src_fps = None
 
     def _open(self):
         if isinstance(self.src, int):
@@ -163,10 +170,31 @@ class OpenCVCamera(Camera):
                 hint = (" -- this OpenCV has no GStreamer. On Jetson use JetPack's system OpenCV "
                         "(pip uninstall opencv-python* opencv-contrib-python*)")
             raise RuntimeError(f"cannot open {self.src!r}{hint}")
+        f = self.cap.get(cv2.CAP_PROP_FPS)
+        self.src_fps = f if 1 <= f <= 1000 else 30.0
+        self._t0, self._n = None, 0
 
     def _grab(self):
+        if not self.realtime:
+            ok, f = self.cap.read()
+            return f if ok else None
+        import time as _t
+        period = 1.0 / self.src_fps
+        if self._t0 is None:
+            self._t0 = _t.perf_counter()
+        # decoder fell behind the video clock -> skip frames without converting them
+        while _t.perf_counter() - (self._t0 + self._n * period) > 2 * period:
+            if not self.cap.grab():
+                return None
+            self._n += 1
         ok, f = self.cap.read()
-        return f if ok else None
+        if not ok:
+            return None
+        self._n += 1
+        wait = self._t0 + self._n * period - _t.perf_counter()
+        if wait > 0:
+            _t.sleep(wait)
+        return f
 
     def _close(self):
         if self.cap is not None:
@@ -476,6 +504,9 @@ def open_camera(uri: str, **kw) -> Camera:
         return HarvestersCamera(uri[len("genicam://"):], **kw)
     if uri.isdigit():
         return OpenCVCamera(int(uri), **kw)
-    # files: process every frame by default (deterministic); live streams: latest only
-    kw.setdefault("latest_only", uri.startswith(("rtsp://", "http://", "https://")))
+    # files: every frame, as fast as possible (deterministic) unless realtime=True;
+    # rtsp: live -> latest only; http(s) media URLs (e.g. YouTube via yt-dlp): replay on the video clock
+    if uri.startswith(("http://", "https://")):
+        kw.setdefault("realtime", True)
+    kw.setdefault("latest_only", uri.startswith("rtsp://"))
     return OpenCVCamera(uri, **kw)

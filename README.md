@@ -21,6 +21,35 @@ for the camera: Aravis, network tuning, ROI and frame-rate table, raw-Bayer path
 power mode and setup. In short: train on a PC, copy `pigeon.f32.onnx` to the Jetson, run `scripts/build_trt.py` there,
 then `run.py --model models/pigeon.engine`.
 
+## Minimal examples: pigeons and doves only (no training needed)
+
+```bash
+pip install -r requirements.txt     # includes yt-dlp
+
+# YouTube link -> downloaded, then replayed at its real speed with live detection
+python examples/youtube_detect.py "https://www.youtube.com/watch?v=VIDEO_ID"
+python examples/youtube_detect.py "https://www.youtube.com/watch?v=VIDEO_ID" --stream   # play while streaming
+python examples/youtube_detect.py clip.mp4 --out runs/clip_detected.mp4 --no-show      # local file, save result
+
+# USB camera (fixed camera -> motion detection; --find ssd also catches perched birds)
+python examples/usb_camera_detect.py --device 0 --width 1280 --height 720 --fps 60
+```
+
+- **Only pigeons and doves get a box.** The decision comes from the iNaturalist bird classifier.
+  "Pigeon/dove" is the sum of its **21 Columbidae species**: rock/feral, wood, collared, turtle, laughing,
+  spotted, mourning and others. All other 943 bird species, and anything that isn't a bird, are negative.
+  Use `--target pigeon` for pigeons only. `--debug` also draws the rejected candidates in grey.
+- **Finding candidates.** The YouTube example defaults to `--find ssd`, a COCO SSD "bird" detector. It works when
+  the camera pans and when birds sit still, as is common in YouTube clips. A fixed camera can use `--find motion`,
+  which is about 20× cheaper.
+- **Real-time replay.** Video plays at its native fps like a live camera. If the detector is slower, frames are dropped
+  rather than letting playback lag.
+- **Measured on real photos** (7 pigeons; 7 parrots, another bird, a cat and a person, moving across a scene):
+  all 7 pigeons were boxed in 66–100% of their frames, labelled "Rock Pigeon", and none of the 10 others was ever boxed.
+  This was with both `ssd` and `motion`. Dove photos were not available in the build environment, so dove recall is unmeasured.
+- **Cost per frame (x86, 4 cores):** SSD about 20 ms, classifier about 1–4 ms. On a Xavier NX CPU, expect several times
+  slower. For a fixed USB camera, use motion detection, and later the trained ONNX/TensorRT student (`--model`).
+
 ## Quick start
 
 ```bash

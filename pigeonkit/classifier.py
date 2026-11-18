@@ -21,6 +21,32 @@ INAT_LABELS_URL = "https://raw.githubusercontent.com/google-coral/test_data/mast
 INAT_PIGEON = (307, 958)          # Columba livia, Columba livia domestica
 INAT_WOODPIGEON = 310             # Columba palumbus
 INAT_BACKGROUND = 964
+# All pigeons AND doves (family Columbidae) among the 964 species (0-based = line - 1).
+# Deliberately NOT included: 459 Cepphus columba "Pigeon Guillemot" (a seabird).
+INAT_COLUMBIDAE = (
+    298, 302, 307, 310, 312, 313, 314,  # Turtle-Dove, Collared-Dove, Rock Pigeon, Wood-Pigeon, 3 Patagioenas
+    325, 333, 338, 341, 342, 417, 441,  # White-tipped, Eared, Ground-Doves, Zebra Dove, Crested Pigeon, Mourning
+    452, 551, 628, 683, 743, 893, 958,  # White-winged, Inca, Laughing, Zenaida, NZ Pigeon, Spotted, Feral Pigeon
+)
+COLUMBIDAE_GENERA = {
+    "Columba", "Streptopelia", "Spilopelia", "Zenaida", "Columbina", "Patagioenas", "Geopelia", "Leptotila",
+    "Ocyphaps", "Phaps", "Treron", "Ducula", "Ptilinopus", "Chalcophaps", "Hemiphaga", "Geophaps", "Leucosarcia",
+    "Macropygia", "Gallicolumba", "Caloenas", "Goura", "Oena", "Turtur", "Metriopelia", "Claravis", "Geotrygon",
+    "Lophophaps", "Petrophassa", "Alopecoenas", "Uropelia", "Zentrygon"}
+TARGETS = {
+    "columbidae": INAT_COLUMBIDAE,                      # pigeons + doves (default)
+    "pigeon": INAT_PIGEON + (INAT_WOODPIGEON,),         # pigeons only (rock/feral/wood)
+    "feral": INAT_PIGEON,                               # city pigeon only
+}
+
+
+def inat_label_names(labels_path: str | None = None) -> list[str]:
+    p = labels_path or os.path.join("models", "inat_bird_labels.txt")
+    try:
+        with open(p) as fh:
+            return [l.strip() for l in fh]
+    except OSError:
+        return []
 
 
 class OnnxPigeonClassifier:
@@ -54,7 +80,9 @@ class OnnxPigeonClassifier:
 class INatBirdClassifier:
     size = 224
 
-    def __init__(self, path: str, threads: int = 2, include_woodpigeon: bool = True, threshold: float = 0.5):
+    def __init__(self, path: str, threads: int = 2, target: str = "columbidae", threshold: float = 0.5):
+        """target: 'columbidae' (pigeons + doves, default) | 'pigeon' | 'feral'.
+        Every other bird species (and non-birds -> 'background' class) counts as negative."""
         try:
             from ai_edge_litert.interpreter import Interpreter, load_delegate
         except ImportError:  # older installs
@@ -65,7 +93,14 @@ class INatBirdClassifier:
         self.inp = self.it.get_input_details()[0]
         self.out = self.it.get_output_details()[0]
         self.oscale, self.ozero = self.out["quantization"]
-        self.idx = list(INAT_PIGEON) + ([INAT_WOODPIGEON] if include_woodpigeon else [])
+        self.idx = list(TARGETS[target])
+        names = inat_label_names(os.path.join(os.path.dirname(path), "inat_bird_labels.txt"))
+        if names:  # sanity check against the shipped label file
+            bad = [i for i in self.idx if names[i].split()[0] not in COLUMBIDAE_GENERA]
+            if bad:
+                raise ValueError(f"label mismatch for indices {bad}: wrong labels file / model?")
+        self.names = names
+        self.last_top = []  # per crop: best matching target species name (for display)
         self.threshold = threshold
 
     def probs(self, crop_bgr: np.ndarray) -> np.ndarray:
@@ -80,7 +115,13 @@ class INatBirdClassifier:
 
     def __call__(self, crops: np.ndarray) -> np.ndarray:
         # model has a fixed batch of 1
-        return np.array([self.probs(c)[self.idx].sum() for c in crops], np.float32)
+        out, self.last_top = [], []
+        for c in crops:
+            p = self.probs(c)[self.idx]
+            out.append(p.sum())
+            if self.names:
+                self.last_top.append(self.names[self.idx[int(p.argmax())]])
+        return np.array(out, np.float32)
 
 
 class _CudaRT:
@@ -218,7 +259,8 @@ def load_classifier(path: str, **kw):
     if path.endswith((".engine", ".plan", ".trt")):
         return TensorRTPigeonClassifier(path, **kw)
     if path.endswith(".tflite"):
-        return INatBirdClassifier(path, **{k: v for k, v in kw.items() if k in ("threads", "threshold")})
+        return INatBirdClassifier(path, **{k: v for k, v in kw.items() if k in ("threads", "threshold", "target")})
+    kw.pop("target", None)  # the trained student already encodes its target classes
     return OnnxPigeonClassifier(path, **kw)
 
 

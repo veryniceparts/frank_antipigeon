@@ -34,6 +34,7 @@ class Track:
     p: float = 0.5       # EMA of P(pigeon)
     n_cls: int = 0       # classifier evaluations so far
     next_cls: int = 0    # frame index when it should be classified next
+    name: str = ""       # optional species name from the classifier (iNat teacher)
 
     @property
     def confident(self) -> bool:

@@ -181,3 +181,10 @@ def test_dalsa_uri_raw_bayer_pipeline(fake_gige_camera):
         assert crop.shape == (1, 32, 32, 3)
     st = cam.network_stats()
     assert st.get("n_completed_buffers", 1) > 0 and st.get("n_failures", 0) == 0
+
+
+def test_suppress_nested():
+    from pigeonkit.detector import suppress_nested
+    b = np.array([[10, 10, 110, 90], [30, 25, 95, 80], [200, 10, 260, 60], [205, 12, 262, 61]])
+    k = suppress_nested(b, np.array([0.9, 0.95, 0.5, 0.4]))
+    assert sorted(k.tolist()) == [1, 2]  # nested pair -> best score; overlapping pair -> best score

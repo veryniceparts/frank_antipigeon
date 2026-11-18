@@ -15,8 +15,9 @@ from .tracker import IoUTracker, Track
 class Detection:
     track_id: int
     box: tuple[int, int, int, int]  # xyxy full-res
-    p: float                        # smoothed P(pigeon)
-    pigeon: bool
+    p: float                        # smoothed P(pigeon or dove)
+    pigeon: bool                    # True -> pigeon/dove (above threshold for >= min_hits frames)
+    name: str = ""                  # species (only with the iNat teacher)
 
 
 class Timer:
@@ -58,8 +59,11 @@ class PigeonPipeline:
             crops = square_crops(frame, tb, self.clf.size, pad=self.pad, bayer=self.bayer)
             t3 = time.perf_counter()
             probs = self.clf(crops)  # one batched call per frame
-            for i, p in zip(todo, probs):
+            names = getattr(self.clf, "last_top", None) or [""] * len(todo)
+            for i, p, nm in zip(todo, probs, names):
                 self.tracker.feed(i, float(p), self.f)
+                if nm:
+                    self.tracker.tracks[i].name = nm.split("(")[-1].rstrip(")") if "(" in nm else nm
             self.n_classified += len(todo)
             t4 = time.perf_counter()
             self.timer.add("crop", t3 - t2)
@@ -67,14 +71,14 @@ class PigeonPipeline:
         self.timer.add("motion", t1 - t0)
         self.timer.add("track", t2 - t1)
         self.timer.n += 1
-        dets = [Detection(t.id, tuple(int(v) for v in t.box), t.p, self.tracker.is_pigeon(t))
+        dets = [Detection(t.id, tuple(int(v) for v in t.box), t.p, self.tracker.is_pigeon(t), t.name)
                 for t in self.tracker.active(self.f)]
         self.f += 1
         return dets
 
 
 def draw(frame: np.ndarray, dets: list[Detection], show_all: bool = True, fps: float | None = None,
-         bayer: int | None = None) -> np.ndarray:
+         bayer: int | None = None, label: str = "PIGEON") -> np.ndarray:
     if frame.ndim == 2:
         out = cv2.cvtColor(frame, bayer if bayer is not None else cv2.COLOR_GRAY2BGR)
     elif frame.shape[2] == 4:
@@ -87,8 +91,8 @@ def draw(frame: np.ndarray, dets: list[Detection], show_all: bool = True, fps: f
         x0, y0, x1, y1 = d.box
         col = (0, 0, 255) if d.pigeon else (160, 160, 160)
         cv2.rectangle(out, (x0, y0), (x1, y1), col, 2 if d.pigeon else 1)
-        label = f"PIGEON {d.p:.2f}" if d.pigeon else f"{d.p:.2f}"
-        cv2.putText(out, label, (x0, max(12, y0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
+        text = f"{d.name or label} {d.p:.2f}" if d.pigeon else f"{d.p:.2f}"
+        cv2.putText(out, text, (x0, max(12, y0 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
     if fps is not None:
         cv2.putText(out, f"{fps:.0f} fps", (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1, cv2.LINE_AA)
     return out
