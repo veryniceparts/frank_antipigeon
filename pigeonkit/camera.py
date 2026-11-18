@@ -247,10 +247,12 @@ class HarvestersCamera(Camera):
 
 def _gst(desc: str, **kw) -> Camera:
     """Prefer PyGObject; fall back to OpenCV's GStreamer backend (needs a GStreamer-enabled cv2)."""
-    try:
-        import gi  # noqa: F401
+    try:  # check the full import: a gi built for another Python version fails only part-way
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst  # noqa: F401
         return GstCamera(desc)
-    except ImportError:
+    except (ImportError, ValueError):
         if desc.rstrip().endswith("format=BGRx"):  # OpenCV's appsink wants BGR
             desc += " ! videoconvert ! video/x-raw,format=BGR"
         return OpenCVCamera(desc + " ! appsink drop=true max-buffers=1 sync=false",

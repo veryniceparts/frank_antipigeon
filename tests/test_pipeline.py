@@ -95,10 +95,13 @@ def test_onnx_export_roundtrip(tmp_path):
 
 
 def test_gst_camera_bgrx_and_gray():
-    gi = pytest.importorskip("gi")
-    gi.require_version("Gst", "1.0")
-    from gi.repository import Gst
-    Gst.init(None)
+    try:
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+        Gst.init(None)
+    except (ImportError, ValueError) as e:
+        pytest.skip(f"PyGObject/GStreamer unavailable: {e}")
     if Gst.ElementFactory.find("videotestsrc") is None:
         pytest.skip("videotestsrc not available")
     from pigeonkit import open_camera
