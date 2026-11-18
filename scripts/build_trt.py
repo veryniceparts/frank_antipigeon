@@ -3,6 +3,8 @@
 
   python3 scripts/build_trt.py --onnx models/pigeon.f32.onnx --out models/pigeon.engine
   python3 scripts/build_trt.py --onnx models/pigeon.f32.onnx --out models/pigeon.dla.engine --dla 0
+  python3 scripts/build_trt.py --onnx models/inat_birds.onnx --out models/inat_birds.engine   # teacher (C++ export)
+  python3 scripts/build_trt.py --onnx models/ssd_birds.onnx  --out models/ssd_birds.engine    # bird detector
 
 Uses trtexec (JetPack: /usr/src/tensorrt/bin/trtexec). FP16 by default. Use the *.f32.onnx that
 train.py writes next to the uint8 model: TensorRT 8.5 (JetPack 5) does not reliably take uint8
@@ -17,18 +19,25 @@ import sys
 
 
 def read_meta(path):
+    """-> input name, input size, dynamic batch?, metadata (sidecar <model>.json wins over ONNX metadata)."""
     try:
         import onnx
         m = onnx.load(path, load_external_data=False)
-        meta = {p.key: p.value for p in m.metadata_props}
+        meta = json.loads({p.key: p.value for p in m.metadata_props}.get("pigeonkit", "{}"))
         inp = m.graph.input[0]
         dims = [d.dim_value or d.dim_param for d in inp.type.tensor_type.shape.dim]
-        return inp.name, int(dims[1]), json.loads(meta.get("pigeonkit", "{}"))
     except ImportError:
         import onnxruntime as ort
         s = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
         i = s.get_inputs()[0]
-        return i.name, int(i.shape[1]), json.loads(s.get_modelmeta().custom_metadata_map.get("pigeonkit", "{}"))
+        inp, dims = i, i.shape
+        meta = json.loads(s.get_modelmeta().custom_metadata_map.get("pigeonkit", "{}"))
+    side = os.path.splitext(path)[0] + ".json"
+    if os.path.exists(side):  # C++ sidecar (kind, size, threshold, targets, anchors ...)
+        with open(side) as fh:
+            meta = {**meta, **json.load(fh)}
+    dynamic = not isinstance(dims[0], int) or dims[0] <= 0
+    return inp.name, int(dims[1]), dynamic, meta
 
 
 def main():
@@ -47,11 +56,12 @@ def main():
     trtexec = a.trtexec or shutil.which("trtexec") or "/usr/src/tensorrt/bin/trtexec"
     if not os.path.exists(trtexec):
         sys.exit("trtexec not found: install JetPack's TensorRT (it lives in /usr/src/tensorrt/bin)")
-    name, size, meta = read_meta(a.onnx)
+    name, size, dynamic, meta = read_meta(a.onnx)
     shp = lambda b: f"{name}:{b}x{size}x{size}x3"  # noqa: E731
     cmd = [trtexec, f"--onnx={a.onnx}", f"--saveEngine={a.out}",
-           f"--minShapes={shp(1)}", f"--optShapes={shp(a.opt_batch)}", f"--maxShapes={shp(a.max_batch)}",
            f"--memPoolSize=workspace:{a.workspace_mb}", "--skipInference"]
+    if dynamic:  # student: dynamic batch of crops; teacher/SSD exports have a fixed batch of 1
+        cmd[3:3] = [f"--minShapes={shp(1)}", f"--optShapes={shp(a.opt_batch)}", f"--maxShapes={shp(a.max_batch)}"]
     if a.precision != "fp32":
         cmd.append(f"--{a.precision}")
     if a.dla is not None:
@@ -66,10 +76,12 @@ def main():
         r = subprocess.run(cmd)
         if r.returncode != 0:
             sys.exit(r.returncode)
-    meta.update(size=size, input=name, precision=a.precision, dla=a.dla, max_batch=a.max_batch)
+    meta.setdefault("kind", "binary")
+    meta.setdefault("rgb", False)
+    meta.update(size=size, input=name, precision=a.precision, dla=a.dla, max_batch=a.max_batch if dynamic else 1)
     with open(os.path.splitext(a.out)[0] + ".json", "w") as fh:
         json.dump(meta, fh, indent=1)
-    print(f"wrote {a.out}  -> test with: python3 scripts/bench.py --model {a.out} --batch 1 4 16")
+    print(f"wrote {a.out}  -> test with: ./cpp/build/pigeon_detect --bench --model {a.out}")
 
 
 if __name__ == "__main__":

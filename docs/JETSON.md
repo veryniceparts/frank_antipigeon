@@ -19,6 +19,19 @@ It runs **JetPack 5.1.x** (Ubuntu 20.04, Python 3.8, CUDA 11.4, TensorRT 8.5). J
 TensorRT engines are tied to the GPU and the TensorRT version, so **always build the engine on the Jetson**.
 Do not copy `.engine` files between machines.
 
+## C++ runtime (recommended)
+
+```bash
+sudo apt install cmake g++            # OpenCV 4.5 (with GStreamer) and TensorRT come with JetPack
+cmake -S cpp -B cpp/build -DCMAKE_BUILD_TYPE=Release && cmake --build cpp/build -j6
+python3 scripts/build_trt.py --onnx models/ssd_birds.onnx --out models/ssd_birds.engine     # optional, GPU
+python3 scripts/build_trt.py --onnx models/pigeon.f32.onnx --out models/pigeon.engine        # your student
+./cpp/build/pigeon_detect --source 0 --model models/pigeon.engine --async --show
+```
+
+JetPack's OpenCV has no `opencv_contrib`, so motion detection falls back to MOG2. For the faster CNT, build OpenCV with
+contrib (and optionally CUDA). See [cpp/README.md](../cpp/README.md).
+
 ## 1. Setup (once)
 
 ```bash

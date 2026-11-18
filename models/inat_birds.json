@@ -1,0 +1,64 @@
+{
+ "kind": "inat",
+ "input": "map/TensorArrayStack/TensorArrayGatherV3",
+ "size": 224,
+ "rgb": true,
+ "threshold": 0.4,
+ "targets": {
+  "columbidae": [
+   298,
+   302,
+   307,
+   310,
+   312,
+   313,
+   314,
+   325,
+   333,
+   338,
+   341,
+   342,
+   417,
+   441,
+   452,
+   551,
+   628,
+   683,
+   743,
+   893,
+   958
+  ],
+  "pigeon": [
+   307,
+   958,
+   310
+  ],
+  "feral": [
+   307,
+   958
+  ]
+ },
+ "names": {
+  "298": "Streptopelia turtur (European Turtle-Dove)",
+  "302": "Streptopelia decaocto (Eurasian Collared-Dove)",
+  "307": "Columba livia (Rock Pigeon)",
+  "310": "Columba palumbus (Common Wood-Pigeon)",
+  "312": "Patagioenas leucocephala (White-crowned Pigeon)",
+  "313": "Patagioenas fasciata (Band-tailed Pigeon)",
+  "314": "Patagioenas flavirostris (Red-billed Pigeon)",
+  "325": "Leptotila verreauxi (White-tipped Dove)",
+  "333": "Zenaida auriculata (Eared Dove)",
+  "338": "Columbina passerina (Common Ground-Dove)",
+  "341": "Columbina talpacoti (Ruddy Ground-Dove)",
+  "342": "Geopelia striata (Zebra Dove)",
+  "417": "Ocyphaps lophotes (Crested Pigeon)",
+  "441": "Zenaida macroura (Mourning Dove)",
+  "452": "Zenaida asiatica (White-winged Dove)",
+  "551": "Columbina inca (Inca Dove)",
+  "628": "Streptopelia senegalensis (Laughing Dove)",
+  "683": "Zenaida aurita (Zenaida Dove)",
+  "743": "Hemiphaga novaeseelandiae (New Zealand Pigeon)",
+  "893": "Streptopelia chinensis (Spotted Dove)",
+  "958": "Columba livia domestica (Feral Pigeon)"
+ }
+}

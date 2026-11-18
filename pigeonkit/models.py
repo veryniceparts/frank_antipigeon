@@ -36,17 +36,27 @@ def build_model(arch: str, pretrained: bool = True) -> tuple[nn.Module, tuple, t
 
 
 class Deploy(nn.Module):
-    """Bakes preprocessing into the graph: uint8 BGR NHWC -> sigmoid prob (N,)."""
+    """Bakes preprocessing into the graph: BGR NHWC (0..255) -> sigmoid prob (N,).
+
+    BGR->RGB and mean/std normalisation are one fixed 1x1 convolution (not a negative-step Slice):
+    runs on every backend incl. OpenCV DNN 4.5/4.6 (JetPack 5) and TensorRT.
+    """
 
     def __init__(self, net: nn.Module, mean, std):
         super().__init__()
         self.net = net
-        self.register_buffer("m", torch.tensor(mean).view(1, 3, 1, 1) * 255)
-        self.register_buffer("s", torch.tensor(std).view(1, 3, 1, 1) * 255)
+        w = torch.zeros(3, 3, 1, 1)
+        b = torch.zeros(3)
+        for c in range(3):  # output channel c (RGB) <- input channel 2-c (BGR)
+            w[c, 2 - c, 0, 0] = 1.0 / (255.0 * std[c])
+            b[c] = -mean[c] / std[c]
+        self.register_buffer("pre_w", w)
+        self.register_buffer("pre_b", b)
 
     def forward(self, x):
-        x = x.permute(0, 3, 1, 2).flip(1).float()  # NHWC BGR -> NCHW RGB
-        return torch.sigmoid(self.net((x - self.m) / self.s)).reshape(-1)
+        x = x.permute(0, 3, 1, 2).float()  # NHWC -> NCHW
+        x = nn.functional.conv2d(x, self.pre_w, self.pre_b)
+        return torch.sigmoid(self.net(x)).reshape(-1)
 
 
 def export_onnx(net: nn.Module, mean, std, size: int, path: str, meta: dict | None = None,

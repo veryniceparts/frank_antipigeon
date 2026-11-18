@@ -7,3 +7,7 @@ runs/
 models/*.tflite
 models/*.onnx
 !models/.gitkeep
+cpp/build/
+# exported C++ models are committed (making them needs TensorFlow, painful on Jetson)
+!models/inat_birds.onnx
+!models/ssd_birds.onnx

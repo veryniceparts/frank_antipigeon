@@ -1,5 +1,9 @@
 # frank_antipigeon: pigeonkit
 
+> **Runtime is C++ → [cpp/README.md](cpp/README.md)** (`pigeon_detect`: USB camera, video files, YouTube,
+> TensorRT on Jetson, async classification for high frame rates). Python remains for training, labelling and
+> evaluation (`scripts/`), and as the reference implementation the C++ output is checked against.
+
 A fast ML kit that decides whether a bird is a pigeon:
 
 ```

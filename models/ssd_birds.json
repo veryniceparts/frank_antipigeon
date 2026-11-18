@@ -1,0 +1,18 @@
+{
+ "kind": "ssd",
+ "input": "normalized_input_image_tensor",
+ "size": 320,
+ "rgb": true,
+ "n_anchors": 2034,
+ "n_classes": 91,
+ "bird_class": 16,
+ "scales": [
+  10.0,
+  10.0,
+  5.0,
+  5.0
+ ],
+ "score": 0.3,
+ "nms_iou": 0.45,
+ "anchors": "ssd_birds.anchors"
+}
